@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Clasificador de Frutas Mejorado</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        #result {
+            margin-top: 20px;
+        }
+        .prediction-bar {
+            height: 20px;
+            background-color: #4CAF50;
+            margin-bottom: 5px;
+        }
+        #image-preview {
+            max-width: 300px;
+            margin-top: 20px;
+        }
+        #webcam-container {
+            margin-top: 20px;
+        }
+        button, input {
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .tab {
+            overflow: hidden;
+            border: 1px solid #ccc;
+            background-color: #f1f1f1;
+        }
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 14px 16px;
+            transition: 0.3s;
+        }
+        .tab button:hover {
+            background-color: #ddd;
+        }
+        .tab button.active {
+            background-color: #ccc;
+        }
+        .tabcontent {
+            display: none;
+            padding: 6px 12px;
+            border: 1px solid #ccc;
+            border-top: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Clasificador de Frutas Mejorado</h1>
+    <button type="button" onclick="init()">Cargar Modelo</button>
+    <div id="model-status">Modelo no cargado</div>
+    
+    <div class="tab">
+        <button class="tablinks" onclick="openTab(event, 'Upload')" id="defaultOpen">Subir Imagen</button>
+        <button class="tablinks" onclick="openTab(event, 'Webcam')">Usar Webcam</button>
+    </div>
+    
+    <div id="Upload" class="tabcontent">
+        <h3>Subir Imagen</h3>
+        <input type="file" id="upload-image" accept="image/*" onchange="predictImage()" disabled>
+        <div id="image-container">
+            <img id="image-preview" style="display: none;" />
+        </div>
+    </div>
+    
+    <div id="Webcam" class="tabcontent">
+        <h3>Webcam en Tiempo Real</h3>
+        <button id="webcam-button" onclick="setupWebcam()" disabled>Iniciar Webcam</button>
+        <div id="webcam-container"></div>
+        <div id="webcam-status"></div>
+        <button id="stop-button" style="display: none;" onclick="stopWebcam()">Detener Webcam</button>
+    </div>
+    
+    <div id="result"></div>
+
+    <script type="text/javascript">
+        let model, labelContainer, maxPredictions;
+        let modelLoaded = false;
+        let webcam, webcamLoop;
+
+        // Verificar que la biblioteca esté disponible
+        window.onload = function() {
+            if (typeof tmImage === 'undefined') {
+                document.getElementById('model-status').innerText = 
+                    "Error: La biblioteca Teachable Machine no está disponible. Revisa tu conexión a internet.";
+                console.error("La biblioteca tmImage no está disponible");
+            }
+            // Abrir pestaña por defecto
+            document.getElementById("defaultOpen").click();
+        }
+
+        function openTab(evt, tabName) {
+            var i, tabcontent, tablinks;
+            tabcontent = document.getElementsByClassName("tabcontent");
+            for (i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].style.display = "none";
+            }
+            tablinks = document.getElementsByClassName("tablinks");
+            for (i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+            document.getElementById(tabName).style.display = "block";
+            evt.currentTarget.className += " active";
+        }
+
+        async function init() {
+            document.getElementById('model-status').innerText = "Cargando modelo...";
+            try {
+                // Verificación adicional antes de intentar cargar
+                if (typeof tmImage === 'undefined' || typeof tmImage.load !== 'function') {
+                    throw new Error("La biblioteca Teachable Machine no está disponible correctamente");
+                }
+
+                const modelURL = './model.json';
+                const metadataURL = './metadata.json';
+                model = await tmImage.load(modelURL, metadataURL);
+                maxPredictions = model.getTotalClasses();
+                
+                // Prepare label container
+                labelContainer = document.getElementById('result');
+                labelContainer.innerHTML = '';  // Clear previous content
+                for (let i = 0; i < maxPredictions; i++) {
+                    const predictionDiv = document.createElement('div');
+                    predictionDiv.className = 'prediction';
+                    const barDiv = document.createElement('div');
+                    barDiv.className = 'prediction-bar';
+                    barDiv.style.width = '0%';
+                    predictionDiv.appendChild(barDiv);
+                    predictionDiv.appendChild(document.createElement('span'));
+                    labelContainer.appendChild(predictionDiv);
+                }
+                
+                // Enable inputs once model is loaded
+                document.getElementById('upload-image').disabled = false;
+                document.getElementById('webcam-button').disabled = false;
+                document.getElementById('model-status').innerText = "Modelo cargado con éxito!";
+                modelLoaded = true;
+                console.log("Modelo cargado correctamente");
+            } catch (error) {
+                console.error("Error cargando el modelo:", error);
+                document.getElementById('model-status').innerText = "Error cargando el modelo: " + error.message;
+            }
+        }
+
+        async function predictImage() {
+            if (!modelLoaded) {
+                alert("Por favor, carga primero el modelo");
+                return;
+            }
+
+            const fileInput = document.getElementById('upload-image');
+            if (fileInput.files.length === 0) {
+                alert("Por favor, selecciona una imagen");
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            reader.onload = function(e) {
+                const imgPreview = document.getElementById('image-preview');
+                imgPreview.src = e.target.result;
+                imgPreview.style.display = 'block';
+                
+                // We'll use the onload event of the image to make sure it's fully loaded
+                imgPreview.onload = async function() {
+                    try {
+                        const predictions = await model.predict(imgPreview);
+                        displayPredictions(predictions);
+                    } catch (error) {
+                        console.error("Error durante la predicción:", error);
+                        document.getElementById('result').innerHTML = 
+                            "<p>Error durante la predicción: " + error.message + "</p>";
+                    }
+                };
+            };
+
+            reader.onerror = function() {
+                console.error("Error leyendo el archivo");
+                alert("Error leyendo el archivo");
+            };
+
+            reader.readAsDataURL(file);
+        }
+
+        async function setupWebcam() {
+            if (!modelLoaded) {
+                alert("Por favor, carga primero el modelo");
+                return;
+            }
+
+            const webcamButton = document.getElementById('webcam-button');
+            const stopButton = document.getElementById('stop-button');
+            const webcamStatus = document.getElementById('webcam-status');
+            
+            webcamButton.disabled = true;
+            webcamStatus.textContent = "Iniciando webcam...";
+            
+            try {
+                const flip = true; // whether to flip the webcam
+                webcam = new tmImage.Webcam(300, 300, flip);
+                await webcam.setup();
+                await webcam.play();
+                webcamStatus.textContent = "Webcam activa - clasificando en tiempo real";
+                
+                document.getElementById('webcam-container').appendChild(webcam.canvas);
+                stopButton.style.display = 'block';
+                
+                // loop to continuously get frames
+                webcamLoop = window.setInterval(async () => {
+                    // update canvas with webcam frame
+                    webcam.update();
+                    // get predictions
+                    const predictions = await model.predict(webcam.canvas);
+                    // display predictions
+                    displayPredictions(predictions);
+                }, 200); // update every 200ms
+                
+            } catch (error) {
+                webcamButton.disabled = false;
+                webcamStatus.textContent = "Error al activar la webcam: " + error.message;
+                console.error("Error con la webcam:", error);
+            }
+        }
+
+        function stopWebcam() {
+            if (webcam) {
+                webcam.stop();
+                clearInterval(webcamLoop);
+                document.getElementById('webcam-status').textContent = "Webcam detenida";
+                document.getElementById('webcam-button').disabled = false;
+                document.getElementById('stop-button').style.display = 'none';
+                
+                // Remove webcam canvas
+                const webcamContainer = document.getElementById('webcam-container');
+                while (webcamContainer.firstChild) {
+                    webcamContainer.removeChild(webcamContainer.firstChild);
+                }
+            }
+        }
+
+        function displayPredictions(predictions) {
+            for (let i = 0; i < predictions.length; i++) {
+                const probability = predictions[i].probability * 100;
+                const barWidth = probability + '%';
+                const predictionElement = labelContainer.childNodes[i];
+                
+                // Update bar width
+                predictionElement.querySelector('.prediction-bar').style.width = barWidth;
+                
+                // Update text
+                predictionElement.querySelector('span').textContent = 
+                    predictions[i].className + ': ' + probability.toFixed(1) + '%';
+            }
+        }
+    </script>
+</body>
+</html>
